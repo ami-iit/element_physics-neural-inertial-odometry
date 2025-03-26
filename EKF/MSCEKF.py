@@ -86,6 +86,24 @@ def get_rotation_from_gravity(acc):
 
 class MSCEKF:
     def __init__(self, config=None):
+        # sanity check
+        expected_attribute = [
+            "sigma_na",
+            "sigma_ng",
+            "ita_ba",
+            "ita_bg",
+            "init_attitude_sigma",
+            "init_yaw_sigma",
+            "init_vel_sigma",
+            "init_pos_sigma",
+            "init_bg_sigma",
+            "init_ba_sigma",
+            "mahalanobis_fail_scale",
+        ]
+        if not all(hasattr(config, attr) for attr in expected_attribute):
+            logging.warning(
+                "At least one filter parameter tuning will be left at its default value."
+            )
 
 
 
