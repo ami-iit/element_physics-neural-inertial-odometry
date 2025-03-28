@@ -2,7 +2,7 @@ import numpy as np
 from numba import jit
 import logging
 import utils.math_utils as maths
-from states import States
+from filter_states import States
 
 @jit(nopython=True, parallel=False, cache=True)
 def state_propagation(R_k, v_k, p_k, bg_k, ba_k, gyro, acc, g, dt):
