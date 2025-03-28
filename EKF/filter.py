@@ -1,3 +1,6 @@
+r"""
+Reference: https://github.com/CathIAS/TLIO/blob/master/src/tracker/scekf.py
+"""
 import numpy as np
 from numba import jit
 import logging

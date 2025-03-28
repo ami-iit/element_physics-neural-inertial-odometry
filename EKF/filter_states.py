@@ -1,4 +1,6 @@
-r"""Define the EKF states."""
+r"""
+Reference: https://github.com/CathIAS/TLIO/blob/master/src/tracker/scekf.py
+"""
 from utils import math_utils as maths
 import numpy as np
 
