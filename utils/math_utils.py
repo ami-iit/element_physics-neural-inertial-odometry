@@ -1,5 +1,6 @@
 from numba import jit
 import numpy as np
+import warnings
 
 def hat(v):
     v = np.squeeze(v)
@@ -180,6 +181,141 @@ def cal_q_from_R(R):
     else:
         return quat
 
+_AXIS_TO_IND = {"x": 0, "y": 1, "z": 2}
+
+
+def _elementary_basis_vector(axis):
+    b = np.zeros(3)
+    b[_AXIS_TO_IND[axis]] = 1
+    return b
+
+
+def compute_euler_from_matrix(matrix, seq, extrinsic=False):
+    """
+    The algorithm assumes intrinsic frame transformations. 
+    The algorithm in the paper is formulated for rotation matrices which are transposition
+    rotation matrices used within Rotation.
+    Adapt the algorithm for our case by
+    1. Instead of transposing our representation, use the transpose of the
+       O matrix as defined in the paper, and be careful to swap indices
+    2. Reversing both axis sequence and angles for extrinsic rotations
+    """
+    if extrinsic:
+        seq = seq[::-1]
+
+    if matrix.ndim == 2:
+        matrix = matrix[None, :, :]
+    num_rotations = matrix.shape[0]
+
+    # Step 0
+    # Algorithm assumes axes as column vectors, here we use 1D vectors
+    n1 = _elementary_basis_vector(seq[0])
+    n2 = _elementary_basis_vector(seq[1])
+    n3 = _elementary_basis_vector(seq[2])
+
+    # Step 2
+    sl = np.dot(np.cross(n1, n2), n3)
+    cl = np.dot(n1, n3)
+
+    # angle offset is lambda from the paper referenced in [2] from docstring of
+    # `as_euler` function
+    offset = np.arctan2(sl, cl)
+    c = np.vstack((n2, np.cross(n1, n2), n1))
+
+    # Step 3
+    rot = np.array([[1, 0, 0], [0, cl, sl], [0, -sl, cl]])
+    res = np.einsum("...ij,...jk->...ik", c, matrix)
+    matrix_transformed = np.einsum("...ij,...jk->...ik", res, c.T.dot(rot))
+
+    # Step 4
+    angles = np.empty((num_rotations, 3))
+    # Ensure less than unit norm
+    positive_unity = matrix_transformed[:, 2, 2] > 1
+    negative_unity = matrix_transformed[:, 2, 2] < -1
+    matrix_transformed[positive_unity, 2, 2] = 1
+    matrix_transformed[negative_unity, 2, 2] = -1
+    angles[:, 1] = np.arccos(matrix_transformed[:, 2, 2])
+
+    # Steps 5, 6
+    eps = 1e-7
+    safe1 = np.abs(angles[:, 1]) >= eps
+    safe2 = np.abs(angles[:, 1] - np.pi) >= eps
+
+    # Step 4 (Completion)
+    angles[:, 1] += offset
+
+    # 5b
+    safe_mask = np.logical_and(safe1, safe2)
+    angles[safe_mask, 0] = np.arctan2(
+        matrix_transformed[safe_mask, 0, 2], -matrix_transformed[safe_mask, 1, 2]
+    )
+    angles[safe_mask, 2] = np.arctan2(
+        matrix_transformed[safe_mask, 2, 0], matrix_transformed[safe_mask, 2, 1]
+    )
+
+    if extrinsic:
+        # For extrinsic, set first angle to zero so that after reversal we
+        # ensure that third angle is zero
+        # 6a
+        angles[~safe_mask, 0] = 0
+        # 6b
+        angles[~safe1, 2] = np.arctan2(
+            matrix_transformed[~safe1, 1, 0] - matrix_transformed[~safe1, 0, 1],
+            matrix_transformed[~safe1, 0, 0] + matrix_transformed[~safe1, 1, 1],
+        )
+        # 6c
+        angles[~safe2, 2] = -(
+            np.arctan2(
+                matrix_transformed[~safe2, 1, 0] + matrix_transformed[~safe2, 0, 1],
+                matrix_transformed[~safe2, 0, 0] - matrix_transformed[~safe2, 1, 1],
+            )
+        )
+    else:
+        # For instrinsic, set third angle to zero
+        # 6a
+        angles[~safe_mask, 2] = 0
+        # 6b
+        angles[~safe1, 0] = np.arctan2(
+            matrix_transformed[~safe1, 1, 0] - matrix_transformed[~safe1, 0, 1],
+            matrix_transformed[~safe1, 0, 0] + matrix_transformed[~safe1, 1, 1],
+        )
+        # 6c
+        angles[~safe2, 0] = np.arctan2(
+            matrix_transformed[~safe2, 1, 0] + matrix_transformed[~safe2, 0, 1],
+            matrix_transformed[~safe2, 0, 0] - matrix_transformed[~safe2, 1, 1],
+        )
+
+    # Step 7
+    if seq[0] == seq[2]:
+        # lambda = 0, so we can only ensure angle2 -> [0, pi]
+        adjust_mask = np.logical_or(angles[:, 1] < 0, angles[:, 1] > np.pi)
+    else:
+        # lambda = + or - pi/2, so we can ensure angle2 -> [-pi/2, pi/2]
+        adjust_mask = np.logical_or(angles[:, 1] < -np.pi / 2, angles[:, 1] > np.pi / 2)
+
+    # Dont adjust gimbal locked angle sequences
+    adjust_mask = np.logical_and(adjust_mask, safe_mask)
+
+    angles[adjust_mask, 0] += np.pi
+    angles[adjust_mask, 1] = 2 * offset - angles[adjust_mask, 1]
+    angles[adjust_mask, 2] -= np.pi
+
+    angles[angles < -np.pi] += 2 * np.pi
+    angles[angles > np.pi] -= 2 * np.pi
+
+    # Step 8
+    if not np.all(safe_mask):
+        warnings.warn(
+            "Gimbal lock detected. Setting third angle to zero since"
+            " it is not possible to uniquely determine all angles."
+        )
+    # Reverse role of extrinsic and intrinsic rotations, but let third angle be
+    # zero for gimbal locked cases
+    if extrinsic:
+        angles = angles[:, ::-1]
+    return angles
+
+
 def logarithm_map_R(R):
     """
     Compute the logarithm map of a rotation matrix R.
@@ -216,3 +352,45 @@ def logarithm_map_R(R):
     # compute the final rotation vector (axis-angle)
     tangent = atn * q_vec
     return tangent
+
+def unwrap_rpy(rpys):
+    """
+    Unwrap RPY angles to ensure smooth transitions 
+    when angles wrap around due to periodicity.
+    Args:
+        - rpys [N, 3] array: each row contains roll, pitch, yaw angles.
+    Return:
+        - a modified rpys array where discontinuities due to angle wrapping are removed.
+    """
+    # compute element-wise difference between consecutive rows
+    # to detect sudden change in the angles
+    diff = rpys[1:, :] - rpys[:-1, :]
+
+    # initialize unwrapped array
+    uw_rpys = np.zeros(rpys.shape)
+    uw_rpys[0, :] = rpys[0, :] # the first row is copied
+
+    # correct large jumps
+    diff[diff > 300] = diff[diff > 300] - 360
+    diff[diff < -300] = diff[diff < -300] + 360
+    uw_rpys[1:, :] = uw_rpys[0, :] = np.cumsum(diff, axis=0)
+
+    return uw_rpys
+
+
+def wrap_rpy(uw_rpys, radians=False):
+    """Inverse operation of unwrap rpy."""
+    bound = np.pi if radians else 180
+    rpys = uw_rpys
+    while rpys/min() < -bound:
+        rpys[rpys < bound] = rpys[rpys < -bound] + 2*bound
+    while rpys.max() >= bound:
+        rpys[rpys >= bound] = rpys[rpys >= bound] - 2*bound
+    return rpys
+
+def inv_SE3(T):
+    """Return the inverse of a 4x4 transformation matrix."""
+    invT = np.eye(4)
+    invT[:3, :3] = T[:3, :3].T
+    invT[:3, 3:4] = -T[:3, :3].T @ T[:3, 3:4]
+    return invT

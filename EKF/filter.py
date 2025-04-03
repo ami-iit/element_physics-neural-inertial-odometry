@@ -4,8 +4,12 @@ Reference: https://github.com/CathIAS/TLIO/blob/master/src/tracker/scekf.py
 import numpy as np
 from numba import jit
 import logging
+from scipy.spatial.transform import Rotation
+
 import utils.math_utils as maths
-from filter_states import States
+from utils.logging import logging
+from EKF.filter_states import States
+
 
 @jit(nopython=True, parallel=False, cache=True)
 def state_propagation(R_k, v_k, p_k, bg_k, ba_k, gyro, acc, g, dt):
@@ -79,8 +83,41 @@ def state_propagation(R_k, v_k, p_k, bg_k, ba_k, gyro, acc, g, dt):
 
 @jit(nopython=True, parallel=False, cache=True)
 def state_cov_propagation(A_aug, B_aug, dt, Sigma, W, Q):
-    
-    return
+    r"""
+    Update the state covariance matrix during the propagation step.
+    Args:
+        - A_aug: augmented state transition matrix (15+6*(m+1), 15+6*m)
+        - B_aug: either (15, 6) or (15+6, 6)
+        - dt: time diff between two propagation steps
+        - Sigma: last state covariance matrix of shape (15+6*m, 15+6*m)
+        - W: 6x6 covariance matrix composed of gyro and acc noise variances 
+        - Q: 6x6 covariance matrix composed of gyro and acc bias evolution noise variances
+    Return:
+        Sigma_kp1: state covariance matrix shape becomes (15+6*(m+1), 15+6*(m+1))
+    NOTE: check https://github.com/CathIAS/TLIO/issues/23#issuecomment-848313945 to better understand A_aug and B_aug
+    """
+    dim_new_state = A_aug.shape[0] - A_aug.shape[1] # either 0 0r 6
+    assert B_aug.shape[0] == 15 + dim_new_state
+
+    A_rbottom = A_aug[-15-dim_new_state:, -15:]
+    A_rbottom_T = A_aug[-15-dim_new_state:, -15:].T
+
+    Sigma_kp1 = np.zeros((A_aug.shape[0], A_aug.shape[0]))
+    extend_dim = -15 - dim_new_state
+    # top-left block is the same as Sigma
+    Sigma_kp1[:extend_dim, :extend_dim] = Sigma[:-15, :-15]
+    # top right block is right multiplied by A_T
+    Sigma_kp1[:extend_dim, extend_dim:] = Sigma[:-15, -15:] @ A_rbottom_T
+    # bottom left block is left multiplied by A
+    Sigma_kp1[extend_dim:, :extend_dim] = A_rbottom @ Sigma[-15:, :-15]
+    # bottom right block is left multiplied by A and right multiplied by A_T
+    Sigma_kp1[extend_dim:, extend_dim:] = A_rbottom @ Sigma[-15:, -15:] @ A_rbottom_T
+
+    # now add the sensor noise and bias random walk noise
+    Sigma_kp1[extend_dim:, extend_dim:] += (B_aug @ W @ B_aug.T) # gyro and acc noise 
+    Sigma_kp1[-6:, -6:] += dt * Q # gyro and acc bias random walk noise
+
+    return Sigma_kp1
 
 
 def get_rotation_from_gravity(acc):
@@ -329,14 +366,36 @@ class MSCEKF:
         return self.innovation, self.meas, self.pred, self.meas_sigma, self.inno_sigma
     
     #---------------Debug---------------#
-    def check_filter_covariance(self):
+    def check_filter_convergence(self):
         """
         Assume the filter has converged after 10 secs.
         """
-        return
+        return (self.state.si_timestamps_us[0] - self.last_timestamp_reset_us) > int(10 * 1e6)
     
     def is_mahalanobis_activated(self):
-        return
+        """
+        Determine whether a Mahalanobis test should be active.
+        """
+        # if the filter not converged yet, the maha-test not activated
+        if not self.is_converged:
+            return False
+        
+        # if the current timestamp still within the forced deactivation period, return False
+        if self.force_mahalanobis_until is not None:
+            if self.state.s_timestamp_us < self.force_mahalanobis_until:
+                return False
+        
+        # if the timestamp of last successful maha-test is valid
+        if self.last_success_mahalanobis is not None:
+            # but current timestamp is more than 0.5 sec past the last successful maha-test
+            if self.state.s_timestamp_us > self.last_success_mahalanobis + int(0.5 * 1e6):
+                logging.warning(f"Deactivating Mahalanobis test, because has been failed for too long!")
+                # indicate no recent successful test
+                self.last_success_mahalanobis = None
+                self.force_mahalanobis_until = self.state.s_timestamp_us + int(1e6)
+                return False
+        
+        return True
     
     #---------------Crucial EKF process---------------#
     def propagate(self, acc, gyro, t_us, t_augmentation_us=None):
@@ -387,7 +446,7 @@ class MSCEKF:
             A_aug = np.zeros((15+6*(N+1), 15+6*N))
             A_aug[0:6*N, 0:6*N] = np.eye(6*N)
             A_aug[-15-6:-15, -15:] = JA
-            A-A_aug[-15:, -15:] = A_kp1
+            A_aug[-15:, -15:] = A_kp1
 
             # arange the matrix B
             JB = np.zeros((6, 6))
@@ -429,11 +488,171 @@ class MSCEKF:
         self.Sigma15 = Sigma_kp1[-15:, -15:]
         self.state.unobs_shift = A_aug @ self.state.unobs_shift # propagate unobs shift
     
-    def update(self):
-        return
+    def update(self, meas, meas_cov, t0_us, t1_us):
+        r"""
+        Incorporate new measurements into the state estimate.
+           
+            - pred: R_wi @ (pj - pi), obtained from past estimate states
+            - pred_cov: log(sigma) of the measurement in 3D
+            - meas: dij, network predicted position displacement
+            - meas_cov: 3x3 covaraince matrix of measurement
+        NOTE: when debugging, replace meas and meas_cov with gt instead of nn outputs.
+        """
+        # if is_converged is False, then check whether the filter has now met the criteria for convergence
+        # if check_filter_convergence is True, then log the update anyway
+        if not self.is_converged and self.check_filter_convergence():
+            logging.info(f"Filter is now assumed to be converged.")
+            self.is_converged = True
+        
+        # find measurement timestamps
+        try:
+            id0 = self.state.si_timestamps_us.index(t0_us)
+            id1 = self.state.si_timestamps_us.index(t1_us)
+        except Exception:
+            logging.error(f"Timestamp not found in the past states!")
+            import ipdb
+            ipdb.set_trace()
+            exit(1)
+        
+        # prepare the measurement covariance matrix (from network output)
+        # NOTE: the covariance is scaled by a factor of 10 
+        # to compensate for the temporal correlation of measurements
+        if self.use_const_cov:
+            # use a constant meas_cov
+            self.R = self.meascov_scale * np.diag(np.array([
+                self.const_cov_val_x,
+                self.const_cov_val_y,
+                self.const_cov_val_z
+            ]))
+        else:
+            # use the meas_cov from network outputs
+            self.R = self.meascov_scale * meas_cov
+
+        # if matrix R is not symmetric, matrix S can be asymmetric
+        # this can cause numerical instability when computing S^-1
+        self.R = 0.5 * (self.R + self.R.T)
+        self.R[self.R < 1e-10] = 0
+
+        # add random Gaussian noise to meas if using simulation
+        if self.add_sim_meas_noise:
+            wp = np.random.multivariate_normal(
+                [0, 0, 0],
+                np.diag([
+                    self.sim_meas_cov_val,
+                    self.sim_meas_cov_val,
+                    self.sim_meas_cov_val_z
+                ]),
+                (1),
+            ).T
+            meas = meas + wp
+        
+        # take the first rotation matrix from the past states
+        # decompose to euler angles, take the yaw rotation
+        Ri = self.state.si_Rs[id0]
+        ri_as_euler = Rotation.from_matrix(Ri).as_euler("xyz") # default returen radians
+        ri_y = ri_as_euler[0, 1]
+        ri_z = ri_as_euler[0, 2]
+        Ri_z = np.array([
+            [np.cos(ri_z), -np.sin(ri_z), 0],
+            [np.sin(ri_z), np.cos(ri_z), 0],
+            [0, 0, 1]
+        ])
+        # compute the displacement of the past states
+        assert id0 < id1, f"index of begin point is larger than the index of the end point!"
+        assert id1 < self.state.N, f"index of end point is larger than the number of past states in the filter!"
+        pred = Ri_z.T.dot(self.state.si_ps[id1] - self.state.si_ps[id0])
+
+        # construct the linearized measurement matrix H
+        H = np.zeros((3, 15+6*self.state.N))
+        H[:, (6*id0+3):(6*id0+6)] = -Ri_z.T # the second 3x3 block is H_deltaPi
+        H[:, (6*id1+3):(6*id1+6)] = Ri_z.T # the last 3x3 block before the 3x15 block is H_deltaPj
+        Hz = np.array([
+            [0, 0, 0],
+            [0, 0, 0],
+            [np.cos(ri_z)*np.tan(ri_y), np.sin(ri_z)*np.tan(ri_y), 1]
+        ]) 
+        H[:, (6*id0):(6*id0+3)] = np.linalg.multi_dot([
+            Ri_z.T, 
+            maths.hat(self.state.si_ps[id1] - self.state.si_ps[id0]), 
+            Hz
+        ])
+
+        # check singularity of matrix H, else the gain K might be computed using an ill-conditioned matrix
+        # thus leading to numerical instability
+        if abs(np.cos(ri_y)) < 1e-5:
+            # skip update if pitch is near 90 deg
+            logging.warning(f"Singularity in matrix H, dropping udpate...")
+            return
+        assert (
+            self.Sigma.shape[0] == H.shape[1]
+        ), f"State covariance matrix has shape {self.Sigma.shape[0]}, while matrix H has shape {H.shape}"
+
+        # apply mahalanobis test to protect the filter estimate against wrong nuwtwork output
+        # TODO: figure out how it works!
+        if self.mahalanobis_factor > 0:
+            S_temp = np.linalg.multi_dot([H, self.Sigma, H.T]) + self.R
+            invS_temp = np.linalg.inv(S_temp)
+            norm_inno_error = np.linalg.multi_dot([(meas - pred).T, invS_temp, (meas - pred)])
+
+            # threshold from https://www.itl.nist.gov/div898/handbook/eda/section3/eda3674.htm for nu=3, p =99
+            test_failed = norm_inno_error > self.mahalanobis_factor * 11.345
+            if self.is_mahalanobis_activated() and test_failed:
+                if self.mahalanobis_fail_scale == 0:
+                    return
+                else:
+                    self.R = self.mahalanobis_fail_scale * self.R
+            else:
+                self.last_success_mahalanobis = self.state.s_timestamp_us
+        
+        # compute elements for updating kaiman gain
+        S = np.linalg.multi_dot([H, self.Sigma, H.T]) + self.R
+        invS = np.linalg.inv(S)
+        self.innovation = meas - pred
+        self.meas = meas
+        self.pred = pred
+        self.meas_sigma = np.sqrt(np.diag(self.R)).reshape((3, 1))
+        self.inno_sigma = np.sqrt(np.diag(S)).reshape((3, 1))
+
+        # obtaint the gain K, compute the dX, update the filter full states
+        K = np.linalg.multi_dot([self.Sigma, H.T, invS])
+        delta_X = K.dot(meas - pred) # meas from network output, pred from filter past states
+        self.state.update_state_with_corrections(delta_X)
+
+        # update the covaraince
+        # approximate as P = P- KHP
+        Sigma_up = self.Sigma - np.linalg.multi_dot([K, H, self.Sigma])
+        Sigma_up = 0.5 * (Sigma_up + Sigma_up.T) # ensure the symmetry
+        self.Sigma = Sigma_up
+        self.Sigma15 = self.Sigma[-15:, -15:]
     
-    def marginalize(self):
-        return
+    def marginalize(self, cut_idx):
+        """
+        Remove the states prior to cut_idx to maintain a fixed state vector size.
+        Args:
+            - cut_idx (int): index up to which states should be removed.
+        """
+        # ensure cut_idx is valid
+        assert (
+            0 <= cut_idx < self.state.N
+        ), f"Invalid cut_idx: {cut_idx}, must be in range [0, {self.state.N-1}]"
+
+        # compute new starting index for all updates
+        new_idx = cut_idx + 1
+        shift_size = 6 * new_idx
+
+        # update state variables
+        self.state.si_Rs = self.state.si_Rs[new_idx, :]
+        self.state.si_ps = self.state.si_ps[new_idx, :]
+        self.state.si_Rs_fej = self.state.si_Rs_fej[new_idx, :]
+        self.state.si_ps_fej = self.state.si_ps_fej[new_idx, :]
+        self.state.si_timestamps_us = self.state.si_timestamps_us[new_idx, :]
+
+        # update the unobservable state shift and covariance matrix
+        self.state.unobs_shift = self.state.unobs_shift[shift_size:, :]
+        self.Sigma = self.Sigma[shift_size:, shift_size:]
+
+        # update state count
+        self.state.N -= new_idx
     
 
 
