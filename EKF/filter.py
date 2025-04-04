@@ -11,7 +11,7 @@ from utils.logging import logging
 from EKF.filter_states import States
 
 
-@jit(nopython=True, parallel=False, cache=True)
+#@jit(nopython=False, parallel=False, cache=True)
 def state_propagation(R_k, v_k, p_k, bg_k, ba_k, gyro, acc, g, dt):
     """ 
     Propagates the rotation (R), velocity (v), position (p) and biases (ba, bg) of a system 
@@ -52,6 +52,8 @@ def state_propagation(R_k, v_k, p_k, bg_k, ba_k, gyro, acc, g, dt):
         ])
     #---------Rotation update---------#
     dtheta = (gyro - bg_k) * dt # corrected angular displacement (rad)
+    dtheta = dtheta.reshape((3,))
+    #print(f"dtheta shape: {dtheta.shape}")
     dR = maths.exponential_SO3_operation(dtheta) # convert small-angle rotation vector to rotation matrix
     R_next = R_k @ dR # update the rotation matrix
 
@@ -510,8 +512,8 @@ class MSCEKF:
             id1 = self.state.si_timestamps_us.index(t1_us)
         except Exception:
             logging.error(f"Timestamp not found in the past states!")
-            import ipdb
-            ipdb.set_trace()
+            # import ipdb
+            # ipdb.set_trace()
             exit(1)
         
         # prepare the measurement covariance matrix (from network output)
@@ -550,8 +552,9 @@ class MSCEKF:
         # decompose to euler angles, take the yaw rotation
         Ri = self.state.si_Rs[id0]
         ri_as_euler = Rotation.from_matrix(Ri).as_euler("xyz") # default returen radians
-        ri_y = ri_as_euler[0, 1]
-        ri_z = ri_as_euler[0, 2]
+        #print(f"ri as euler shape: {ri_as_euler.shape}")
+        ri_y = ri_as_euler[1]
+        ri_z = ri_as_euler[2]
         Ri_z = np.array([
             [np.cos(ri_z), -np.sin(ri_z), 0],
             [np.sin(ri_z), np.cos(ri_z), 0],
@@ -641,11 +644,11 @@ class MSCEKF:
         shift_size = 6 * new_idx
 
         # update state variables
-        self.state.si_Rs = self.state.si_Rs[new_idx, :]
-        self.state.si_ps = self.state.si_ps[new_idx, :]
-        self.state.si_Rs_fej = self.state.si_Rs_fej[new_idx, :]
-        self.state.si_ps_fej = self.state.si_ps_fej[new_idx, :]
-        self.state.si_timestamps_us = self.state.si_timestamps_us[new_idx, :]
+        self.state.si_Rs = self.state.si_Rs[new_idx:]
+        self.state.si_ps = self.state.si_ps[new_idx:]
+        self.state.si_Rs_fej = self.state.si_Rs_fej[new_idx:]
+        self.state.si_ps_fej = self.state.si_ps_fej[new_idx:]
+        self.state.si_timestamps_us = self.state.si_timestamps_us[new_idx:]
 
         # update the unobservable state shift and covariance matrix
         self.state.unobs_shift = self.state.unobs_shift[shift_size:, :]

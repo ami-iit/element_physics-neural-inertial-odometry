@@ -11,7 +11,7 @@ def hat(v):
     ])
     return R
 
-@jit(nopython=True, parallel=False, cache=True)
+#@jit(nopython=True, parallel=False, cache=True)
 def exponential_SO3_operation(omega):
     """
     Computes the matrix exponential of a 3D vector omega in so(3),
@@ -45,7 +45,7 @@ def exponential_SO3_operation(omega):
 vec_exponential_SO3_operation = np.vectorize(exponential_SO3_operation, signature="(3)->(3,3)")
 
 
-@jit(nopython=True, parallel=False, cache=True)
+#@jit(nopython=True, parallel=False, cache=True)
 def exponential_SO3_right_jacob(omega):
     """
     Computes the right Jacobian of the SO(3) exponential map.
@@ -77,7 +77,7 @@ def exponential_SO3_right_jacob(omega):
         )
     return J
 
-@jit(nopython=True, parallel=False, cache=True)
+#@jit(nopython=True, parallel=False, cache=True)
 def rot_2vec(a, b):
     """
     Computes the rotation matrix that aligns vector 'a' to vector 'b'.
@@ -382,7 +382,7 @@ def wrap_rpy(uw_rpys, radians=False):
     """Inverse operation of unwrap rpy."""
     bound = np.pi if radians else 180
     rpys = uw_rpys
-    while rpys/min() < -bound:
+    while rpys.min() < -bound:
         rpys[rpys < bound] = rpys[rpys < -bound] + 2*bound
     while rpys.max() >= bound:
         rpys[rpys >= bound] = rpys[rpys >= bound] - 2*bound

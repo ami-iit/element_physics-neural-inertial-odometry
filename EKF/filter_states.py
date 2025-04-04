@@ -95,7 +95,8 @@ class States(object):
             self.si_ps = np.split(ps_past_new.reshape(N*3, 1), N, 0) # a list of N (3, 1) arrays
         
         # update the current state
-        dtheta = dX_evol[:3]
+        dtheta = dX_evol[:3].reshape((3,))
+        #print(f"dtheta in filter state shape: {dtheta.shape}")
         dR = maths.exponential_SO3_operation(dtheta)
         self.s_R = dR.dot(self.s_R)
         dv = dX_evol[3:6]

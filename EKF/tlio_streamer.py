@@ -84,19 +84,25 @@ class TLIOStreamer:
             - meas_cov: a covariance matrix representing the uncertainty in meas.
         """
         # find two closest timestamps around ts_oldest_state
-        idx_left = np.where(self.vio_ts < ts_oldest_state)[0][-1]
-        idx_right = np.where(self.vio_ts > ts_oldest_state)[0][0]
+        # print(f"left idx: {np.array(np.where(self.vio_ts < ts_oldest_state))[0]}")
+        # print(f"right idx: {np.array(np.where(self.vio_ts > ts_oldest_state))[0]}")
+        # print(f"vio ts: {self.vio_ts}")
+        ts_oldest_state_sec = ts_oldest_state * 1e-6
+        ts_end_sec = ts_end * 1e-6
+        idx_left = np.array(np.where(self.vio_ts < ts_oldest_state_sec))[0, -1]
+        idx_right = np.array(np.where(self.vio_ts > ts_oldest_state_sec))[0, 0]
         interp_vio_ts = self.vio_ts[idx_left: idx_right+1]
         # extract the corresponding euler angles from VIO data
         interp_vio_euler = self.vio_euler[idx_left: idx_right+1, :]
 
         # get the interpolated orientatin at the timestamp ts_oldest_state (namely the first element in the imu buffer)
         vio_eulers_unwrapped = maths.unwrap_rpy(interp_vio_euler)
-        vio_euler_unwrapped = interp1d(interp_vio_ts, vio_eulers_unwrapped, axis=0)(ts_oldest_state)
+        vio_euler_unwrapped = interp1d(interp_vio_ts, vio_eulers_unwrapped, axis=0)(ts_oldest_state_sec)
+        #print(f"vio euler uw shape: {vio_euler_unwrapped.shape}")
         vio_euler = np.deg2rad(maths.wrap_rpy(vio_euler_unwrapped))
 
         # compute simulated displacement
-        ts_interp = np.array([ts_oldest_state, ts_end]) # time period until timestamp ts_end
+        ts_interp = np.array([ts_oldest_state_sec, ts_end_sec]) # time period until timestamp ts_end
         vio_interp_p = interp1d(self.vio_ts, self.vio_p, axis=0)(ts_interp)
         vio_meas_displacement = vio_interp_p[1] - vio_interp_p[0]
 

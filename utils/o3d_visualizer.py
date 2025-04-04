@@ -15,7 +15,7 @@ logger = get_logger(__file__)
 
 ALIGN_GT = True  # Whether to align the position and yaw of GT at start.
 SHOW_W_FRAME = True
-MAX_TRAJ_LEN = 50  # None # Int for fading trajectory (good if really messy) or None for show the whole trajectory
+MAX_TRAJ_LEN = 100  # None # Int for fading trajectory (good if really messy) or None for show the whole trajectory
 
 # Scale down the whole scene since O3D clips anythig beyond 2m from the camera (seriously why?!)
 # https://github.com/isl-org/Open3D/issues/803
@@ -41,7 +41,6 @@ T_rotate_y_up = np.array(
     dtype=np.float64,
 )
 
-
 def scaled_imu_pose_from_vio_ghost(vio_ghost):
     qxyzw_vio = vio_ghost[:, 1:5]
     p_vio = vio_ghost[:, 5:8]
@@ -61,7 +60,7 @@ class O3dVisualizer:
         pointcloud_folder=None,
         save_imgs_path=None,  # "/tmp/vis_frames",
     ):
-        #o3d.visualization.gui.Application.instance.initialize()
+        o3d.visualization.gui.Application.instance.initialize()
         self.vio_ghost = vio_ghost
         self.realign_next_update = True
 
@@ -78,7 +77,7 @@ class O3dVisualizer:
                 [0, 0, 1],
             ]
         )
-        self.follow_cam = True
+        self.follow_cam = False
         self.follow_cam_offsets_idx = 0
         self.follow_cam_zoom = 2.0
         self.follow_cam_dzoom = 0.1
@@ -86,8 +85,8 @@ class O3dVisualizer:
             [[1, 1, 0], [-1, 1, 1], [0, 1, 1], [0, 1, -1], [0, 1, 0]], dtype=np.float32
         )
 
-        #self.vis = o3d.visualization.O3DVisualizer("TLIO Viewer")
-        self.vis = o3d.visualization.Visualizer("TLIO Viewer")
+        self.vis = o3d.visualization.O3DVisualizer("TLIO Viewer")
+        #self.vis = o3d.visualization.Visualizer("TLIO Viewer")
         self.vis.show_ground = False
         self.vis.ground_plane = o3d.visualization.rendering.Scene.GroundPlane.XZ
         self.vis.show_skybox(False)

@@ -132,11 +132,12 @@ class FilterRunner:
         # NOTE: allow the filter to read meas from vio instead of network (for debug)
         self.manager = FilterManager(
             model_path=args.io.model_path,
-            model_param_path=args.model_param_path,
+            model_param_path=args.io.model_param_path,
             update_freq=args.filter.update_freq,
             filter_tuning_cfg=filter_tuning,
             imu_calib=imu_calib,
-            force_cpu=False
+            force_cpu=False,
+            debug_filter=True
         )
         # log full state buffer
         self.log_full_state_buffer = None
@@ -153,21 +154,27 @@ class FilterRunner:
         """Extract and log the filter states at a given timestamp ts."""
         R, v, p, ba, bg = self.manager.filter.get_evolving_state() # return the current filter state
         
+        p_temp = p.reshape((3,))
+        v_temp = v.reshape((3,))
+        ba_temp = ba.reshape((3,))
+        bg_temp = bg.reshape((3,))
         # update traj logs
         quat = Rotation.from_matrix(R).as_quat()
         traj_step = np.array([
-            ts, p[0], p[1], p[2], 
+            ts, p_temp[0], p_temp[1], p_temp[2], 
             quat[0], quat[1], quat[2], quat[3]
         ])
         self.seq_traj_logs.append(traj_step)
 
         # update velocity logs
-        vel_step = np.array([ts, v[0], v[1], v[2]])
+        vel_step = np.array([ts, v_temp[0], v_temp[1], v_temp[2]])
         self.seq_vel_logs.append(vel_step)
 
         # update biases logs
         bias_step = np.array([
-            ts, bg[0], bg[1], bg[2], ba[0], ba[1], ba[2]
+            ts, 
+            bg_temp[0], bg_temp[1], bg_temp[2], 
+            ba_temp[0], ba_temp[1], ba_temp[2]
         ])
         self.seq_biases_logs.append(bias_step)
 
@@ -181,7 +188,7 @@ class FilterRunner:
                 inno *= np.nan
                 meas *= np.nan
                 pred *= np.nan
-                meaas_sigma *= np.nan
+                meas_sigma *= np.nan
                 inno_sigma *= np.nan
             
             ts_temp = ts.reshape((1, 1))
@@ -238,6 +245,7 @@ class FilterRunner:
                 states = np.loadtxt(self.fullstate_logfile, delimiter=",")
                 np.save(self.fullstate_logfile[:-4] + ".npy", states)
                 os.remove(self.fullstate_logfile)
+        logging.info(f"All filter estimates successfully saved!")
 
     def run(self):
         """
@@ -266,15 +274,18 @@ class FilterRunner:
 
         # iterate through the IMU sequence
         n_data = self.dStreamer.ds_size
-        for i in pbar(range(n_data)):
+        for i in pbar(range(int(n_data*0.1))):
             # fetch single step imu data
             # TODO: check the unit of imu_ts here!
             imu_ts, acc_raw, gyro_raw = self.dStreamer.get_datapoint(i)
+            #print(f"imu_ts: {imu_ts}, shape: {np.array([imu_ts]).shape}")
             imu_t_us = int(imu_ts * 1e6) # convert to microseconds
 
             # if debugging, replace acc and gyro biases with values from VIO calibration
             if self.args.flags.debug_using_vio_bias:
                 # TODO: check the unit of vio_ts here! Should be aligned with imu_ts!
+                # NOTE: vio_ba and vio_bg not existing in dataStreamer!!
+                #print(f"vio_ba: {self.dStreamer.vio_ba}")
                 vio_ba = interp1d(self.dStreamer.vio_ts, self.dStreamer.vio_ba, axis=0)(imu_ts)
                 vio_bg = interp1d(self.dStreamer.vio_ts, self.dStreamer.vio_bg, axis=0)(imu_ts)
                 self.manager.filter.state.s_ba = np.atleast_2d(vio_ba).T
@@ -292,7 +303,28 @@ class FilterRunner:
                     self.manager.last_gyro_before_next_interp_time,
                     did_update
                 )
+
+                # get the vio gt state at imu_ts
+                vio_p = interp1d(self.dStreamer.vio_ts, self.dStreamer.vio_p, axis=0)(imu_ts)
+                vio_R = interp1d(self.dStreamer.vio_ts, self.dStreamer.vio_R, axis=0)(imu_ts)
+
                 # we ignore the visualization part here
+                if i % 100 ==0 and self.visualizer is not None:
+                    # update the pose of tlio
+                    T_World_imu = np.eye(4)
+                    T_World_imu[:3, :3] = self.manager.filter.state.s_R
+                    T_World_imu[:3, 3:4] = self.manager.filter.state.s_p
+                    # update the pose of vio gt
+                    T_gt = np.eye(4)
+                    T_gt[:3, :3] = vio_R.reshape((3, 3))
+                    T_gt[:3, 3:4] = vio_p.reshape((3, 1))
+                    self.visualizer.update(
+                        imu_t_us,
+                        {"tlio": T_World_imu,
+                         "vio_gt": T_gt},
+                        {"tlio": [T_World_imu[:3, 3]],
+                         "vio_gt": [T_gt[:3, 3]]}
+                    )
             else:
                 # if not using vio, run the filter anyway
                 if not self.args.flags.initialize_with_vio:
@@ -300,13 +332,14 @@ class FilterRunner:
                 # otherwise initialize the filter with vio data
                 else:
                     # set initial biases default as zeros 
-                    init_ba, init_bg = np.zeros((3, 1)), np.zeors((3, 1))
+                    init_ba, init_bg = np.zeros((3, 1)), np.zeros((3, 1))
                     # initialize the biases with offline calibrations
                     if self.args.flags.initialize_with_offline_calib:
                         init_ba = self.manager.icalib.accBias
                         init_bg = self.manager.icalib.gyroBias
                     # ensure the imu timestamp is within the vio range
                     if imu_ts < self.dStreamer.vio_ts[0]:
+                        logging.info(f"current imu_ts {imu_ts} smaller than first vio_ts {self.dStreamer.vio_ts[0]}")
                         continue
 
                     # interpolate vio states at imu timestamp imu_ts
@@ -315,13 +348,17 @@ class FilterRunner:
                     vio_euler = interp1d(self.dStreamer.vio_ts, self.dStreamer.vio_euler, axis=0)(imu_ts)
                     vio_R = Rotation.from_euler("xyz", vio_euler, degrees=True).as_matrix()
                     # initialize the filter
+                    # NOTE: seems a bug from the original code
+                    # NOTE: you should give acc_raw and gyro_raw as last two inputs to the following func
+                    # NOTE: instead it was given the init_ba and init_bg
+                    # NOTE: why this func returns a False??
                     self.manager.init_with_state_at_time(
                         imu_t_us,
                         vio_R,
                         np.atleast_2d(vio_v).T,
                         np.atleast_2d(vio_p).T,
-                        init_ba,
-                        init_bg
+                        gyro_raw,
+                        acc_raw
                     )
         # save the full state logs
         self.save_logs(self.args.flags.save_as_npy)

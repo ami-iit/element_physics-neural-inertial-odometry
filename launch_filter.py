@@ -21,7 +21,7 @@ if __name__ == "__main__":
     #------------------- I/O params -------------------#
     pIO = dotdict({
         "root_dir": "./local_data/tlio_golden",
-        "dataset_number": "110982076486017",
+        "dataset_number": "249057315955347",
         "out_dir": "./local_data/out_dir_tlio",
         "model_path": None,
         "model_param_path": None,
@@ -52,8 +52,8 @@ if __name__ == "__main__":
         "initialize_with_vio": True, # initialize filter state with gt data
         "initialize_with_offline_calib": True, # initialize bias state with offline calib or 0
         "use_const_cov": False,
-        "use_vio_meas": False, # use gt delta pose to udpate filter
-        "debug_using_vio_bias": True,
+        "use_vio_meas": True, # use gt delta pose to udpate filter
+        "debug_using_vio_bias": False,
         "add_sim_meas_noise": False,
         "visualize": False,
         "log_full_state": True,
