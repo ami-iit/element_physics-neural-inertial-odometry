@@ -133,14 +133,14 @@ class MSCEKF:
         expected_attribute = [
             "sigma_na", # std of acc noise m/s^2
             "sigma_ng", # std of gyro noise rad/s
-            "ita_ba", # acc bias random walk m/s^3
-            "ita_bg", # gyro bias random walk rad/s^2
-            "init_attitude_sigma", # std of attitude(roll/pitch) uncertainty rad
-            "init_yaw_sigma", # std of yaw uncertainty rad
-            "init_vel_sigma", # std of velocity uncertainty m/s
-            "init_pos_sigma", # std of position uncertainty m
-            "init_bg_sigma", # std of gyro bias uncertainty rad/s
-            "init_ba_sigma", # std of acc bias uncertainty m/s^2
+            "eta_ba", # acc bias random walk m/s^3
+            "eta_bg", # gyro bias random walk rad/s^2
+            "init_sigma_attitude", # std of attitude(roll/pitch) uncertainty rad
+            "init_sigma_yaw", # std of yaw uncertainty rad
+            "init_sigma_vel", # std of velocity uncertainty m/s
+            "init_sigma_pos", # std of position uncertainty m
+            "init_sigma_ba", # std of gyro bias uncertainty rad/s
+            "init_sigma_bg", # std of acc bias uncertainty m/s^2
             "mahalanobis_fail_scale", # scaling factor for Mahalanobis distance test (outlier rejection)
         ]
         if not all(hasattr(config, attr) for attr in expected_attribute):
@@ -154,19 +154,19 @@ class MSCEKF:
         # uncertainties of gyro and acc biases and noises
         self.sigma_na = getattr(config, "sigma_na", np.sqrt(1e-3))
         self.sigma_ng = getattr(config, "sigma_ng", np.sqrt(1e-4))
-        self.ita_ba = getattr(config, "ita_ba", 1e-4)
-        self.ita_bg = getattr(config, "ita_bg", 1e-6)
+        self.eta_ba = getattr(config, "eta_ba", 1e-4)
+        self.eta_bg = getattr(config, "eta_bg", 1e-6)
 
         # initial uncertainties of filter states
-        self.init_attitude_sigma = getattr(config, "init_attitude_sigma", 10.0/180.0*np.pi)
-        self.init_yaw_sigma = getattr(config, "init_yaw_sigma", 0.1/180.0*np.pi)
-        self.init_vel_sigma = getattr(config, "init_vel_sigma", 1.0)
-        self.init_pos_sigma = getattr(config, "init_pos_sigma", 0.001)
-        self.init_bg_sigma = getattr(config, "init_bg_sigma", 0.0001)
-        self.init_ba_sigma = getattr(config, "init_ba_sigma", 0.2)
+        self.init_sigma_attitude = getattr(config, "init_sigma_attitude", 1.0/180.0*np.pi)
+        self.init_sigma_yaw = getattr(config, "init_sigma_yaw", 0.1/180.0*np.pi)
+        self.init_sigma_vel = getattr(config, "init_sigma_vel", 1.0)
+        self.init_sigma_pos = getattr(config, "init_sigma_pos", 0.001)
+        self.init_sigma_ba = getattr(config, "init_sigma_ba", 0.0001)
+        self.init_sigma_bg = getattr(config, "init_sigma_bg", 0.2)
 
         # measurement covariance related params
-        self.meascov_scale = getattr(config, "meascov_scale", 1.0) # scaling factor for measurement covariance
+        self.meascov_scale = getattr(config, "meas_cov_scale", 10.0) # scaling factor for measurement covariance
         self.add_sim_meas_noise = getattr(config, "add_sim_meas_noise", False)
         if self.add_sim_meas_noise:
             self.sim_meas_cov_val = config.sim_meas_cov_val
@@ -216,12 +216,12 @@ class MSCEKF:
         Prepare the full/evolving state covariance matrices.
         """
         # prepare the variance of states
-        var_atti = np.power(self.init_attitude_sigma, 2.0)
-        var_yaw = np.power(self.init_yaw_sigma, 2.0)
-        var_vel = np.power(self.init_vel_sigma, 2.0)
-        var_pos = np.power(self.init_pos_sigma, 2.0)
-        var_bg_init = np.power(self.init_bg_sigma, 2.0)
-        var_ba_init = np.power(self.init_ba_sigma, 2.0)
+        var_atti = np.power(self.init_sigma_attitude, 2.0)
+        var_yaw = np.power(self.init_sigma_yaw, 2.0)
+        var_vel = np.power(self.init_sigma_vel, 2.0)
+        var_pos = np.power(self.init_sigma_pos, 2.0)
+        var_bg_init = np.power(self.init_sigma_ba, 2.0)
+        var_ba_init = np.power(self.init_sigma_bg, 2.0)
 
         # initialize the full state covariance matrix shape (6N+15, 6N+15)
         cov_state_full = np.zeros((15+6*self.state.N, 15+6*self.state.N))
@@ -250,8 +250,8 @@ class MSCEKF:
         var_na = np.power(self.sigma_na, 2.0)
         var_ng = np.power(self.sigma_ng, 2.0)
         # sensor bias random walk noise variance
-        var_ba = np.power(self.ita_ba, 2.0)
-        var_bg = np.power(self.ita_bg, 2.0)
+        var_ba = np.power(self.eta_ba, 2.0)
+        var_bg = np.power(self.eta_bg, 2.0)
 
         # prepare the sensor noise and bias covariance matrices
         self.W = np.diag(np.array([var_ng, var_ng, var_ng, var_na, var_na, var_na]))

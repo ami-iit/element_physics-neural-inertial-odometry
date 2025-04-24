@@ -274,7 +274,8 @@ class FilterRunner:
 
         # iterate through the IMU sequence
         n_data = self.dStreamer.ds_size
-        for i in pbar(range(int(n_data*0.1))):
+        factor = 1.0
+        for i in pbar(range(int(n_data * factor))):
             # fetch single step imu data
             # TODO: check the unit of imu_ts here!
             imu_ts, acc_raw, gyro_raw = self.dStreamer.get_datapoint(i)
@@ -317,7 +318,13 @@ class FilterRunner:
                     # update the pose of vio gt
                     T_gt = np.eye(4)
                     T_gt[:3, :3] = vio_R.reshape((3, 3))
-                    T_gt[:3, 3:4] = vio_p.reshape((3, 1))
+                    T_gt[:3, 3:4] = self.manager.filter.state.s_p.reshape((3, 1))
+
+                    # calculate the position error for the visualizer
+                    print(f"{i}-th gt position: {vio_p}")
+                    print(f"{i}-th estimated position: {self.manager.filter.state.s_p.reshape((1, 3))}")
+                    p_error = np.sqrt((vio_p - self.manager.filter.state.s_p.flatten())**2)
+                    print(f"{i}-th per-axis position rmse error: {p_error}")
                     self.visualizer.update(
                         imu_t_us,
                         {"tlio": T_World_imu,
@@ -351,14 +358,13 @@ class FilterRunner:
                     # NOTE: seems a bug from the original code
                     # NOTE: you should give acc_raw and gyro_raw as last two inputs to the following func
                     # NOTE: instead it was given the init_ba and init_bg
-                    # NOTE: why this func returns a False??
                     self.manager.init_with_state_at_time(
                         imu_t_us,
                         vio_R,
                         np.atleast_2d(vio_v).T,
                         np.atleast_2d(vio_p).T,
-                        gyro_raw,
-                        acc_raw
+                        init_ba,
+                        init_bg
                     )
         # save the full state logs
         self.save_logs(self.args.flags.save_as_npy)

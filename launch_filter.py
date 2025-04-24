@@ -21,7 +21,7 @@ if __name__ == "__main__":
     #------------------- I/O params -------------------#
     pIO = dotdict({
         "root_dir": "./local_data/tlio_golden",
-        "dataset_number": "249057315955347",
+        "dataset_number": "145820422949970",
         "out_dir": "./local_data/out_dir_tlio",
         "model_path": None,
         "model_param_path": None,
@@ -55,7 +55,7 @@ if __name__ == "__main__":
         "use_vio_meas": True, # use gt delta pose to udpate filter
         "debug_using_vio_bias": False,
         "add_sim_meas_noise": False,
-        "visualize": False,
+        "visualize": True,
         "log_full_state": True,
         "save_as_npy": True
     })

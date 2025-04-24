@@ -9,7 +9,6 @@ import scipy.io as io
 import h5py
 from pathlib import Path
 import pickle
-import config as cfg
 
 
 class DataProcessor:
@@ -131,27 +130,6 @@ def save_data(data, dir, filename):
     with open(file_path, "wb") as f:
         pickle.dump(data, f)
 
-if __name__ == "__main__":
-    # config
-    ifeel_dir = "./data/PredictionDataset_03_03_25"
-    save_data_dir = "./data/processed"
-
-    # load the data
-    data_processor = DataProcessor(ifeel_dir)
-    data_processor.read()
-    imus = data_processor.get_imus(cfg.tasks, cfg.nodes, cfg.imu_attris)
-    joint_states, base_states, _ = data_processor.get_states(
-                                                    tasks=cfg.tasks, 
-                                                    attris_joint=cfg.joint_attris,
-                                                    attris_base=cfg.base_attris,
-                                                    attris_dynamics=cfg.dynamics_attris,
-                                                    is_joint=True, is_base=True, is_dynamics=False)
-    
-    # save the data
-    save_data(imus, save_data_dir, "imu_data.npy")
-    save_data(joint_states, save_data_dir, "joint_data.npy")
-    save_data(base_states, save_data_dir, "base_data.npy")
-    print(f"Successfully saved all data to {save_data_dir}.")
 
     
     

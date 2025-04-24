@@ -235,17 +235,17 @@ class FilterManager:
         self._after_filter_init_member_setup(t_us, res["gyro_calibed"], res["acc_calibed"])
         return False
     
-    def _init_without_state_at_time(self, t_us, gyro_raw, acc_raw):
-        assert isinstance(t_us, int)
-        res = self._compensate_meas_with_init_calib(gyro_raw, acc_raw)
-        self.filter.initialize_covs_with_zero_state(
-            t_us, 
-            res["acc_calibed"], 
-            res["init_ba"], 
-            res["init_bg"]
-        )
-        self._after_filter_init_member_setup(t_us, res["gyro_calibed"], res["acc_calibed"])
-        return False
+    # def _init_without_state_at_time(self, t_us, gyro_raw, acc_raw):
+    #     assert isinstance(t_us, int)
+    #     res = self._compensate_meas_with_init_calib(gyro_raw, acc_raw)
+    #     self.filter.initialize_covs_with_zero_state(
+    #         t_us, 
+    #         res["acc_calibed"], 
+    #         res["init_ba"], 
+    #         res["init_bg"]
+    #     )
+    #     self._after_filter_init_member_setup(t_us, res["gyro_calibed"], res["acc_calibed"])
+    #     return False
 
     #---------------Functions to update the filter when already initialized---------------#
     def on_imu_measurement(self, t_us, gyro_raw, acc_raw):
@@ -259,7 +259,16 @@ class FilterManager:
         if self.filter.is_initialized:
             return self._on_imu_meas_after_init(t_us, gyro_raw, acc_raw)
         else:
-            self._init_without_state_at_time(t_us, gyro_raw, acc_raw)
+            #self._init_without_state_at_time(t_us, gyro_raw, acc_raw)
+            res = self._compensate_meas_with_init_calib(gyro_raw, acc_raw)
+            self.filter.initialize_covs_with_zero_state(
+                t_us, 
+                res["acc_calibed"], 
+                res["init_ba"], 
+                res["init_bg"]
+            )
+            self._after_filter_init_member_setup(t_us, res["gyro_calibed"], res["acc_calibed"])
+
   
     def _on_imu_meas_after_init(self, t_us, gyro_raw, acc_raw):
         # t_us is the imu timestamps at current step when called
@@ -271,7 +280,11 @@ class FilterManager:
 
             # calibrate raw imu data with offline calibration scale
             # used for the filter
+            print(f"time: {t_us}, acc data before scaling: {acc_raw}")
+            print(f"time: {t_us}, gyro data before scaling: {gyro_raw}")
             acc_raw, gyro_raw = self.icalib.scale_raw_imu(acc_raw, gyro_raw)
+            print(f"time: {t_us}, acc after scaling: {acc_raw}")
+            print(f"time: {t_us}, gyro data after scaling: {gyro_raw}")
         else:
             acc_calibed, gyro_calibed = acc_raw, gyro_raw
         

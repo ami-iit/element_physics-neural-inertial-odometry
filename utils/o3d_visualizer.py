@@ -19,7 +19,7 @@ MAX_TRAJ_LEN = 100  # None # Int for fading trajectory (good if really messy) or
 
 # Scale down the whole scene since O3D clips anythig beyond 2m from the camera (seriously why?!)
 # https://github.com/isl-org/Open3D/issues/803
-SCALE = 0.1
+SCALE = 0.01
 
 T_flip = np.array(
     [
@@ -88,7 +88,7 @@ class O3dVisualizer:
         self.vis = o3d.visualization.O3DVisualizer("TLIO Viewer")
         #self.vis = o3d.visualization.Visualizer("TLIO Viewer")
         self.vis.show_ground = False
-        self.vis.ground_plane = o3d.visualization.rendering.Scene.GroundPlane.XZ
+        self.vis.ground_plane = o3d.visualization.rendering.Scene.GroundPlane.XY
         self.vis.show_skybox(False)
         self.vis.scene_shader = o3d.visualization.O3DVisualizer.Shader.UNLIT
         self.vis.point_size = 1
